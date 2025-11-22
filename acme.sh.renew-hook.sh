@@ -20,10 +20,34 @@ set -euo pipefail
 # 1. 获取证书路径
 # 优先使用命令行参数，其次使用环境变量 (acme.sh 导出)，最后尝试使用已有的环境变量
 
-# 初始化变量 (优先取 acme.sh 环境变量)
-DOMAIN="${Le_Domain:-$DOMAIN}"
-KEY_FILE="${Le_KeyFile:-$KEY_FILE}"
-FULLCHAIN_FILE="${Le_FullChainFile:-$FULLCHAIN_FILE}"
+# 优先级：acme.sh 环境变量 > 手动环境变量 > 空字符串
+
+# 1. 确保环境变量在扩展时不会因为 set -u 而报错。
+#    使用 :- 来抑制未定义变量的错误。
+
+# 如果 Le_Domain 已定义，取 Le_Domain 的值；否则，取手动设置的 DOMAIN 的值；
+# 如果 DOMAIN 也没定义，取空字符串。
+DOMAIN="${Le_Domain:-${DOMAIN:-}}"
+KEY_FILE="${Le_KeyFile:-${KEY_FILE:-}}"
+FULLCHAIN_FILE="${Le_FullChainFile:-${FULLCHAIN_FILE:-}}"
+
+# 另一种更简洁但效果一样的写法：
+# DOMAIN="${Le_Domain:-}"
+# DOMAIN="${DOMAIN:-}"
+
+# 但为了保持原有的优先级逻辑，以下写法最能体现原意：
+# 优先级: Le_Var > User_Var > ''
+_d_hook="${Le_Domain:-}" # 确保 Le_Domain 没定义时不报错
+_d_user="${DOMAIN:-}"    # 确保 DOMAIN 没定义时不报错
+DOMAIN="${_d_hook:-$_d_user}"
+
+_k_hook="${Le_KeyFile:-}"
+_k_user="${KEY_FILE:-}"
+KEY_FILE="${_k_hook:-$_k_user}"
+
+_f_hook="${Le_FullChainFile:-}"
+_f_user="${FULLCHAIN_FILE:-}"
+FULLCHAIN_FILE="${_f_hook:-$_f_user}"
 
 # 解析命令行参数 (覆盖环境变量)
 while [[ $# -gt 0 ]]; do
