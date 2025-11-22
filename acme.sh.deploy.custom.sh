@@ -133,9 +133,28 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	_ca="${Le_CaFile:-$CA_FILE}"
 	_f="${Le_FullChainFile:-$FULLCHAIN_FILE}"
 
+	# 自动查找证书逻辑
+	if [[ -n "$_d" ]] && [[ -z "$_k" || -z "$_f" ]]; then
+		echo "尝试自动查找证书文件..."
+		CANDIDATE_DIRS=(
+			"$HOME/.acme.sh/${_d}_ecc"
+			"$HOME/.acme.sh/${_d}"
+		)
+
+		for dir in "${CANDIDATE_DIRS[@]}"; do
+			if [[ -f "$dir/${_d}.key" && -f "$dir/fullchain.cer" ]]; then
+				echo "找到证书: $dir"
+				_k="$dir/${_d}.key"
+				_f="$dir/fullchain.cer"
+				break
+			fi
+		done
+	fi
+
 	if [[ -z "$_k" || -z "$_f" ]]; then
 		echo "Error: 缺少证书文件路径。"
 		echo "用法: KEY_FILE=... FULLCHAIN_FILE=... $0"
+		echo "或者: DOMAIN=example.com $0 (自动查找)"
 		exit 1
 	fi
 
