@@ -28,11 +28,18 @@ if [[ -n "$DOMAIN" ]] && [[ -z "$KEY_FILE" || -z "$FULLCHAIN_FILE" ]]; then
 	)
 
 	for dir in "${CANDIDATE_DIRS[@]}"; do
-		if [[ -f "$dir/${DOMAIN}.key" && -f "$dir/fullchain.cer" ]]; then
-			echo "找到证书: $dir"
-			KEY_FILE="$dir/${DOMAIN}.key"
-			FULLCHAIN_FILE="$dir/fullchain.cer"
-			break
+		if [[ -f "$dir/${DOMAIN}.key" ]]; then
+			if [[ -f "$dir/fullchain.cer" ]]; then
+				FULLCHAIN_FILE="$dir/fullchain.cer"
+			elif [[ -f "$dir/fullchain.pem" ]]; then
+				FULLCHAIN_FILE="$dir/fullchain.pem"
+			fi
+
+			if [[ -n "$FULLCHAIN_FILE" ]]; then
+				echo "找到证书: $dir"
+				KEY_FILE="$dir/${DOMAIN}.key"
+				break
+			fi
 		fi
 	done
 fi
