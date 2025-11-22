@@ -19,10 +19,29 @@ DOMAIN="${Le_Domain:-$DOMAIN}"
 KEY_FILE="${Le_KeyFile:-$KEY_FILE}"
 FULLCHAIN_FILE="${Le_FullChainFile:-$FULLCHAIN_FILE}"
 
+# 自动查找证书逻辑 (用于手动执行)
+if [[ -n "$DOMAIN" ]] && [[ -z "$KEY_FILE" || -z "$FULLCHAIN_FILE" ]]; then
+	echo "尝试自动查找证书文件..."
+	CANDIDATE_DIRS=(
+		"$HOME/.acme.sh/${DOMAIN}_ecc"
+		"$HOME/.acme.sh/${DOMAIN}"
+	)
+
+	for dir in "${CANDIDATE_DIRS[@]}"; do
+		if [[ -f "$dir/${DOMAIN}.key" && -f "$dir/fullchain.cer" ]]; then
+			echo "找到证书: $dir"
+			KEY_FILE="$dir/${DOMAIN}.key"
+			FULLCHAIN_FILE="$dir/fullchain.cer"
+			break
+		fi
+	done
+fi
+
 # 2. 验证参数
 if [[ -z "$KEY_FILE" || -z "$FULLCHAIN_FILE" ]]; then
 	echo "Error: 缺少证书文件路径。"
 	echo "此脚本应由 acme.sh 通过 --renew-hook 调用，或手动设置环境变量 Le_KeyFile 和 Le_FullChainFile。"
+	echo "或者手动执行时设置 DOMAIN 环境变量以自动查找。"
 	exit 1
 fi
 
