@@ -20,85 +20,105 @@
 # acme.sh 钩子函数
 # 函数名必须是: 文件名(去掉后缀, -替换为_)_deploy
 custom_deploy() {
-  local _domain="$1"
-  local _key="$2"
-  local _cert="$3"
-  local _ca="$4"
-  local _fullchain="$5"
+	local _domain="$1"
+	local _key="$2"
+	local _cert="$3"
+	local _ca="$4"
+	local _fullchain="$5"
 
-  echo "=== 开始部署证书 (Hook: custom) ==="
-  echo "域名: ${_domain:-Unknown}"
-  echo "密钥: $_key"
-  echo "证书: $_fullchain"
+	echo "=== 开始部署证书 (Hook: custom) ==="
+	echo "域名: ${_domain:-Unknown}"
+	echo "密钥: $_key"
+	echo "证书: $_fullchain"
 
-  # 验证必要文件
-  if [[ -z "$_key" || ! -f "$_key" ]]; then
-    echo "Error: 密钥文件无效或未提供。"
-    return 1
-  fi
+	# 验证必要文件
+	if [[ -z "$_key" || ! -f "$_key" ]]; then
+		echo "Error: 密钥文件无效或未提供。"
+		return 1
+	fi
 
-  if [[ -z "$_fullchain" || ! -f "$_fullchain" ]]; then
-    echo "Error: 证书文件无效或未提供。"
-    return 1
-  fi
+	if [[ -z "$_fullchain" || ! -f "$_fullchain" ]]; then
+		echo "Error: 证书文件无效或未提供。"
+		return 1
+	fi
 
-  # --------------------------------------------------------------------------
-  # 服务器配置
-  # --------------------------------------------------------------------------
-  declare -A SERVER_CONFIG
-  SERVER_CONFIG["103.214.22.46"]="nginx:/etc/letsencrypt" # IP:服务:路径
-  #SERVER_CONFIG["162.216.115.92"]="nginx:/etc/letsencrypt" # IP:服务:路径
+	# --------------------------------------------------------------------------
+	# 3. 获取配置文件
+	# --------------------------------------------------------------------------
+	# 尝试查找配置文件
+	# 1. ~/.acme.sh/${_domain}/${_domain}.env (兼容默认安装路径)
+	# 2. ~/.acme.sh/${_domain}_ecc/${_domain}.env
 
-  # --------------------------------------------------------------------------
-  # 遍历部署
-  # --------------------------------------------------------------------------
-  for SERVER_IP in "${!SERVER_CONFIG[@]}"; do
-    # 提取目标服务和路径
-    local CONFIG_STRING="${SERVER_CONFIG[$SERVER_IP]}"
-    local SERVER_TYPE="${CONFIG_STRING%%:*}"
-    local TARGET_DIR="${CONFIG_STRING##*:}"
-    local RELOAD_CMD=""
+	local CONFIG_FILE=""
+	local CANDIDATE_FILES=(
+		"$HOME/.acme.sh/${_domain}/${_domain}.env"
+		"$HOME/.acme.sh/${_domain}_ecc/${_domain}.env"
+	)
 
-    echo "--- 正在部署到 $SERVER_IP ($SERVER_TYPE) ---"
+	for f in "${CANDIDATE_FILES[@]}"; do
+		if [[ -f "$f" ]]; then
+			CONFIG_FILE="$f"
+			break
+		fi
+	done
 
-    # 1. 确保目标目录存在
-    ssh "root@$SERVER_IP" "mkdir -p $TARGET_DIR" || {
-      echo "无法在 $SERVER_IP 创建目录 $TARGET_DIR"
-      continue
-    }
+	if [[ -z "$CONFIG_FILE" ]]; then
+		echo "Warning: 未找到配置文件 ${_domain}.env，跳过部署。"
+		echo "请在以下路径之一创建配置文件: ${CANDIDATE_FILES[*]}"
+		return 0
+	fi
 
-    # 2. 使用 scp 将文件复制到目标机器
-    # 建议使用 -o StrictHostKeyChecking=no 确保自动化时不被询问
-    # 复制密钥 (保持原文件名)
-    # 复制证书 (重命名为 域名.fullchain.cer)
-    if ! scp "$_key" "root@$SERVER_IP:$TARGET_DIR/" ||
-      ! scp "$_fullchain" "root@$SERVER_IP:$TARGET_DIR/${_domain}.fullchain.cer"; then
-      echo "SCP 复制到 $SERVER_IP 失败！"
-      continue
-    fi
+	echo "使用配置文件: $CONFIG_FILE"
 
-    # 2. 根据服务器类型执行不同的重启命令
-    case "$SERVER_TYPE" in
-    nginx)
-      RELOAD_CMD="systemctl reload nginx"
-      ;;
-    apache)
-      RELOAD_CMD="systemctl reload httpd"
-      ;;
-    *)
-      echo "未知服务类型，跳过重启。"
-      ;;
-    esac
+	# --------------------------------------------------------------------------
+	# 4. 遍历部署
+	# --------------------------------------------------------------------------
+	# 读取配置文件每一行
+	# 格式: ip:path:reload_cmd
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		# 跳过空行和注释
+		[[ -z "$line" || "$line" =~ ^# ]] && continue
 
-    # 3. 通过 ssh 执行重启命令
-    if [ -n "$RELOAD_CMD" ]; then
-      ssh "root@$SERVER_IP" "$RELOAD_CMD"
-      echo "已在 $SERVER_IP 上执行重启命令：$RELOAD_CMD"
-    fi
-  done
+		# 解析配置
+		local SERVER_IP=$(echo "$line" | cut -d: -f1)
+		local TARGET_DIR=$(echo "$line" | cut -d: -f2)
+		local RELOAD_CMD=$(echo "$line" | cut -d: -f3-)
 
-  echo "=== 部署完成 ==="
-  return 0
+		if [[ -z "$SERVER_IP" || -z "$TARGET_DIR" ]]; then
+			echo "Warning: 配置行格式错误，跳过: $line"
+			continue
+		fi
+
+		echo "--- 正在部署到 $SERVER_IP ---"
+		echo "目标路径: $TARGET_DIR"
+		echo "重启命令: ${RELOAD_CMD:-无}"
+
+		# 1. 确保目标目录存在
+		ssh "root@$SERVER_IP" "mkdir -p $TARGET_DIR" || {
+			echo "无法在 $SERVER_IP 创建目录 $TARGET_DIR"
+			continue
+		}
+
+		# 2. 使用 scp 将文件复制到目标机器
+		# 建议使用 -o StrictHostKeyChecking=no 确保自动化时不被询问
+		# 复制密钥 (保持原文件名)
+		# 复制证书 (重命名为 域名.fullchain.cer)
+		if ! scp "$_key" "root@$SERVER_IP:$TARGET_DIR/" ||
+			! scp "$_fullchain" "root@$SERVER_IP:$TARGET_DIR/${_domain}.fullchain.cer"; then
+			echo "SCP 复制到 $SERVER_IP 失败！"
+			continue
+		fi
+
+		# 3. 通过 ssh 执行重启命令
+		if [ -n "$RELOAD_CMD" ]; then
+			ssh "root@$SERVER_IP" "$RELOAD_CMD"
+			echo "已在 $SERVER_IP 上执行重启命令：$RELOAD_CMD"
+		fi
+
+	done <"$CONFIG_FILE"
+
+	echo "=== 部署完成 ==="
+	return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -106,19 +126,19 @@ custom_deploy() {
 # ------------------------------------------------------------------------------
 # 如果脚本被直接执行（而不是被 source），则手动调用函数
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  # 优先使用环境变量，兼容手动运行
-  _d="${Le_Domain:-$DOMAIN}"
-  _k="${Le_KeyFile:-$KEY_FILE}"
-  _c="${Le_CertFile:-$CERT_FILE}"
-  _ca="${Le_CaFile:-$CA_FILE}"
-  _f="${Le_FullChainFile:-$FULLCHAIN_FILE}"
+	# 优先使用环境变量，兼容手动运行
+	_d="${Le_Domain:-$DOMAIN}"
+	_k="${Le_KeyFile:-$KEY_FILE}"
+	_c="${Le_CertFile:-$CERT_FILE}"
+	_ca="${Le_CaFile:-$CA_FILE}"
+	_f="${Le_FullChainFile:-$FULLCHAIN_FILE}"
 
-  if [[ -z "$_k" || -z "$_f" ]]; then
-    echo "Error: 缺少证书文件路径。"
-    echo "用法: KEY_FILE=... FULLCHAIN_FILE=... $0"
-    exit 1
-  fi
+	if [[ -z "$_k" || -z "$_f" ]]; then
+		echo "Error: 缺少证书文件路径。"
+		echo "用法: KEY_FILE=... FULLCHAIN_FILE=... $0"
+		exit 1
+	fi
 
-  custom_deploy "$_d" "$_k" "$_c" "$_ca" "$_f"
-  exit $?
+	custom_deploy "$_d" "$_k" "$_c" "$_ca" "$_f"
+	exit $?
 fi
