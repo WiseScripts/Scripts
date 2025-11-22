@@ -7,17 +7,42 @@
 # 当证书更新成功后，acme.sh 会自动调用此脚本。
 #
 # 用法:
-#   acme.sh --install-cert -d example.com \
-#     --key-file /path/to/example.com.key \
-#     --fullchain-file /path/to/example.com.fullchain.cer \
-#     --renew-hook "~/acme.sh/renew-hook.sh"
+#   自动模式 (由 acme.sh 调用):
+#     acme.sh --install-cert -d example.com ... --renew-hook "/path/to/renew-hook.sh"
+#
+#   手动模式 (通过参数):
+#     ./renew-hook.sh -d example.com --key-file /path/to/key --fullchain-file /path/to/cert
 # ------------------------------------------------------------------------------
 
 # 1. 获取证书路径
-# acme.sh 在调用 renew-hook 时会导出以下环境变量
+# 优先使用命令行参数，其次使用环境变量 (acme.sh 导出)，最后尝试使用已有的环境变量
+
+# 初始化变量 (优先取 acme.sh 环境变量)
 DOMAIN="${Le_Domain:-$DOMAIN}"
 KEY_FILE="${Le_KeyFile:-$KEY_FILE}"
 FULLCHAIN_FILE="${Le_FullChainFile:-$FULLCHAIN_FILE}"
+
+# 解析命令行参数 (覆盖环境变量)
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	-d | --domain)
+		DOMAIN="$2"
+		shift 2
+		;;
+	-k | --key-file)
+		KEY_FILE="$2"
+		shift 2
+		;;
+	-f | --fullchain-file)
+		FULLCHAIN_FILE="$2"
+		shift 2
+		;;
+	*)
+		echo "Warning: Ignoring unknown argument: $1"
+		shift
+		;;
+	esac
+done
 
 # 自动查找证书逻辑 (用于手动执行)
 if [[ -n "$DOMAIN" ]] && [[ -z "$KEY_FILE" || -z "$FULLCHAIN_FILE" ]]; then
