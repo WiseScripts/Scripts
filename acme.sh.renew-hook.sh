@@ -159,8 +159,18 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 
 	# 4.3 通过 ssh 执行重启命令
 	if [ -n "$RELOAD_CMD" ]; then
-		ssh "root@$SERVER_IP" "$RELOAD_CMD"
-		echo "已在 $SERVER_IP 上执行重启命令：$RELOAD_CMD"
+		# 增强逻辑：如果是 systemctl reload 命令，先检查服务是否存在/运行
+		# 仅匹配简单的 "systemctl reload service_name" 格式
+		if [[ "$RELOAD_CMD" =~ ^systemctl\ +reload\ +([^[:space:]]+)$ ]]; then
+			local _svc="${BASH_REMATCH[1]}"
+			echo "检测到 systemctl reload，目标服务: $_svc"
+			# 远程执行：检查服务是否 active，是则 reload，否则跳过
+			ssh "root@$SERVER_IP" "if systemctl is-active --quiet $_svc; then $RELOAD_CMD; else echo 'Service $_svc not active, skipping reload.'; fi"
+		else
+			# 其他命令直接执行
+			ssh "root@$SERVER_IP" "$RELOAD_CMD"
+		fi
+		echo "已在 $SERVER_IP 上处理重启命令：$RELOAD_CMD"
 	fi
 
 done <"$CONFIG_FILE"
