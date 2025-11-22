@@ -126,12 +126,39 @@ custom_deploy() {
 # ------------------------------------------------------------------------------
 # 如果脚本被直接执行（而不是被 source），则手动调用函数
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-	# 优先使用环境变量，兼容手动运行
-	_d="${Le_Domain:-$DOMAIN}"
-	_k="${Le_KeyFile:-$KEY_FILE}"
-	_c="${Le_CertFile:-$CERT_FILE}"
-	_ca="${Le_CaFile:-$CA_FILE}"
-	_f="${Le_FullChainFile:-$FULLCHAIN_FILE}"
+	# 1. 解析命令行参数
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-d | --domain)
+			_d="$2"
+			shift
+			shift
+			;;
+		-k | --key)
+			_k="$2"
+			shift
+			shift
+			;;
+		-f | --fullchain)
+			_f="$2"
+			shift
+			shift
+			;;
+		*) # 默认第一个位置参数为域名
+			if [[ -z "$_d" && ! "$1" =~ ^- ]]; then
+				_d="$1"
+			fi
+			shift
+			;;
+		esac
+	done
+
+	# 2. 如果参数未提供，尝试读取环境变量 (兼容 Hook 协议环境变量)
+	_d="${_d:-${Le_Domain:-$DOMAIN}}"
+	_k="${_k:-${Le_KeyFile:-$KEY_FILE}}"
+	_c="${_c:-${Le_CertFile:-$CERT_FILE}}"
+	_ca="${_ca:-${Le_CaFile:-$CA_FILE}}"
+	_f="${_f:-${Le_FullChainFile:-$FULLCHAIN_FILE}}"
 
 	# 自动查找证书逻辑
 	if [[ -n "$_d" ]] && [[ -z "$_k" || -z "$_f" ]]; then
@@ -142,18 +169,25 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 		)
 
 		for dir in "${CANDIDATE_DIRS[@]}"; do
-			if [[ -f "$dir/${_d}.key" && -f "$dir/fullchain.cer" ]]; then
-				echo "找到证书: $dir"
-				_k="$dir/${_d}.key"
-				_f="$dir/fullchain.cer"
-				break
+			if [[ -f "$dir/${_d}.key" ]]; then
+				if [[ -f "$dir/fullchain.cer" ]]; then
+					_f="$dir/fullchain.cer"
+				elif [[ -f "$dir/fullchain.pem" ]]; then
+					_f="$dir/fullchain.pem"
+				fi
+
+				if [[ -n "$_f" ]]; then
+					echo "找到证书: $dir"
+					_k="$dir/${_d}.key"
+					break
+				fi
 			fi
 		done
 	fi
 
 	if [[ -z "$_k" || -z "$_f" ]]; then
 		echo "Error: 缺少证书文件路径。"
-		echo "用法: KEY_FILE=... FULLCHAIN_FILE=... $0"
+		echo "用法: $0 -d example.com [-k key.pem] [-f fullchain.cer]"
 		echo "或者: DOMAIN=example.com $0 (自动查找)"
 		exit 1
 	fi
