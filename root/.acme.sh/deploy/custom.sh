@@ -33,6 +33,7 @@ custom_deploy() {
   # local CA_FILE="$4" # 未使用
   local FULLCHAIN_FILE="$5"
   local EXPLICIT_LOG_FILE="$6" # 新增的第6个参数
+  local HOST="$7" # 新增的第7个参数
 
   # 定义日志文件
   local LOG_FILE=""
@@ -159,8 +160,8 @@ custom_deploy() {
   for line in "${CONFIG_LINES[@]}"; do
 
     # 优化解析配置：使用 Bash 内部字符串操作代替 echo | cut (效率更高)
-    # SERVER_IP
-    local SERVER_IP="${line%%:*}"
+    # HOST_OR_IP
+    local HOST_OR_IP="${line%%:*}"
 
     # 剩下的部分 (path:reload_cmd)
     local remaining="${line#*:}"
@@ -171,13 +172,20 @@ custom_deploy() {
     # RELOAD_CMD
     local RELOAD_CMD="${remaining#*:}"
 
-    # 严格检查格式：确保有 SERVER_IP 和 TARGET_DIR
-    if [[ -z "$SERVER_IP" || -z "$TARGET_DIR" ]]; then
+    # 严格检查格式：确保有 HOST_OR_IP 和 TARGET_DIR
+    if [[ -z "$HOST_OR_IP" || -z "$TARGET_DIR" ]]; then
       log "Warning: 配置行格式错误 (缺少 IP 或路径)，跳过: $line"
       continue
     fi
 
-    log "--- 正在检查 $SERVER_IP ---"
+    log "=========================================================================="
+    log "准备部署 $HOST_OR_IP"
+    if [[ -n "$HOST" ]] && [[ "$HOST" != "$HOST_OR_IP" ]]; then
+      log "跳过部署 $HOST_OR_IP"
+      log "完成部署 $HOST_OR_IP"
+      log "=========================================================================="
+      continue
+    fi
 
     # ----------------------------------------------------------------------
     # 哈希检查逻辑
@@ -188,12 +196,11 @@ custom_deploy() {
     # 获取远程文件哈希
     # 使用 ssh 执行 md5sum，如果文件不存在则会报错，我们捕获它
     # 注意: 远程机器也需要有 md5sum 命令
-    REMOTE_HASH=$(ssh "root@$SERVER_IP" "md5sum \"$TARGET_DIR/${DOMAIN}.fullchain.cer\" 2>/dev/null" | awk '{print $1}') || true
+    REMOTE_HASH=$(ssh "root@$HOST_OR_IP" "md5sum \"$TARGET_DIR/${DOMAIN}.fullchain.cer\" 2>/dev/null" | awk '{print $1}') || true
 
     if [[ -n "$REMOTE_HASH" ]]; then
       if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
         log "远程证书哈希匹配 ($REMOTE_HASH)，无需更新。"
-        log "--- 完成部署 $SERVER_IP ---"
         NEED_DEPLOY=false
       else
         log "远程证书哈希不匹配 (远程: $REMOTE_HASH vs 本地: $LOCAL_HASH)，准备更新..."
@@ -203,6 +210,8 @@ custom_deploy() {
     fi
 
     if [[ "$NEED_DEPLOY" == "false" ]]; then
+      log "完成部署 $HOST_OR_IP"
+      log "=========================================================================="
       continue
     fi
 
@@ -214,8 +223,8 @@ custom_deploy() {
 
     # 1. 确保目标目录存在
     # 目标路径必须加双引号，防止路径中包含空格
-    ssh "root@$SERVER_IP" "mkdir -p \"$TARGET_DIR\"" || {
-      log "Error: 无法在 $SERVER_IP 创建目录 $TARGET_DIR"
+    ssh "root@$HOST_OR_IP" "mkdir -p \"$TARGET_DIR\"" || {
+      log "Error: 无法在 $HOST_OR_IP 创建目录 $TARGET_DIR"
       continue
     }
 
@@ -224,12 +233,12 @@ custom_deploy() {
     # 增加 -p 选项保留时间戳和权限，并确保目标路径加引号
     # 复制密钥 (保持原文件名)
     # 复制证书 (重命名为 域名.fullchain.cer)
-    if ! scp -p "$KEY_FILE" "root@$SERVER_IP:$TARGET_DIR/" ||
-      ! scp -p "$FULLCHAIN_FILE" "root@$SERVER_IP:$TARGET_DIR/${DOMAIN}.fullchain.cer"; then
-      log "Error: SCP 复制到 $SERVER_IP 失败！"
+    if ! scp -p "$KEY_FILE" "root@$HOST_OR_IP:$TARGET_DIR/" ||
+      ! scp -p "$FULLCHAIN_FILE" "root@$HOST_OR_IP:$TARGET_DIR/${DOMAIN}.fullchain.cer"; then
+      log "Error: SCP 复制到 $HOST_OR_IP 失败！"
       continue
     fi
-    log "证书文件已复制到 $SERVER_IP:$TARGET_DIR/"
+    log "证书文件已复制到 $HOST_OR_IP:$TARGET_DIR/"
 
     # 3. 通过 ssh 执行重启命令
     if [[ -n "$RELOAD_CMD" ]]; then # 使用 [[ ... ]] 增强判断
@@ -265,7 +274,7 @@ custom_deploy() {
         "
 
         # 远程执行，并捕获输出
-        REMOTE_OUTPUT=$(ssh "root@$SERVER_IP" "$_ssh_cmd" 2>&1)
+        REMOTE_OUTPUT=$(ssh "root@$HOST_OR_IP" "$_ssh_cmd" 2>&1)
         SSH_STATUS=$?
 
         # 解析远程输出，查找 CMD_EXEC 标记
@@ -275,21 +284,22 @@ custom_deploy() {
           log "Error: 远程执行 systemctl 命令失败 (return Code $SSH_STATUS)!"
           log "$REMOTE_OUTPUT"
         elif [[ "$ACTUAL_ACTION" == "skipped" ]]; then
-          log "Warning: Service $_svc 在 $SERVER_IP 上未运行，操作已跳过。"
+          log "Warning: Service $_svc 在 $HOST_OR_IP 上未运行，操作已跳过。"
         else
-          log "成功在 $SERVER_IP 上执行 systemctl $ACTUAL_ACTION $_svc"
+          log "成功在 $HOST_OR_IP 上执行 systemctl $ACTUAL_ACTION $_svc"
         fi
 
       else
         # 其他命令（非 systemctl reload）直接执行
-        ssh "root@$SERVER_IP" "$RELOAD_CMD" || {
+        ssh "root@$HOST_OR_IP" "$RELOAD_CMD" || {
           log "Warning: 远程执行命令失败: $RELOAD_CMD"
         }
-        log "已在 $SERVER_IP 上执行命令：$RELOAD_CMD"
+        log "已在 $HOST_OR_IP 上执行命令：$RELOAD_CMD"
       fi
     fi
 
-    log "--- 完成部署 $SERVER_IP ---"
+    log "完成部署 $HOST_OR_IP"
+    log "=========================================================================="
 
   done <"$CONFIG_FILE"
 
@@ -336,7 +346,7 @@ main() {
   fi
 
   # 情况 B: 手动执行模式 (有参数调用)
-  local _d="" _k="" _c="" _a="" _f=""
+  local _d="" _k="" _c="" _a="" _f="" _h=""
 
   # 1. 解析命令行参数
   while [[ $# -gt 0 ]]; do
@@ -359,6 +369,10 @@ main() {
       ;;
     -f | --fullchain)
       _f="$2"
+      shift 2
+      ;;
+    -h | --host)
+      _h="$2"
       shift 2
       ;;
     *) # 默认第一个位置参数为域名
@@ -417,6 +431,7 @@ main() {
 
     # 定义统一日志文件路径
     local GLOBAL_LOG_FILE="$HOME/.acme.sh/custom.log" # <--- 新增日志变量
+    local HOST="$_h" # <--- 新增主机变量
 
     # 使用 for 循环遍历
     for dir in "$ACME_HOME"/*/; do
@@ -470,7 +485,7 @@ main() {
           total_count=$((total_count + 1))
 
           # 调用部署函数，注意这里传递的域名是 domain_name
-          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE"; then
+          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE"  "$HOST"; then
              success_count=$((success_count + 1))
           fi
         else
