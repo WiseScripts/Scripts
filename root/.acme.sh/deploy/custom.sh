@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 
 # 设置严格模式，防止脚本在遇到错误时继续执行
 # -e: 遇到非零退出状态立即退出
@@ -32,14 +32,27 @@ custom_deploy() {
   # local CERT_FILE="$3" # 未使用
   # local CA_FILE="$4" # 未使用
   local FULLCHAIN_FILE="$5"
+  local EXPLICIT_LOG_FILE="$6" # 新增的第6个参数
 
   # 定义日志文件
-  if [ -d "$HOME/.acme.sh/${DOMAIN}_ecc" ]; then
-    DOMAIN_FOLDER="${DOMAIN}_ecc"
+  local LOG_FILE=""
+
+  if [[ -n "$EXPLICIT_LOG_FILE" ]]; then
+    # 如果第6个参数不为空，则使用它
+    LOG_FILE="$EXPLICIT_LOG_FILE"
   else
-    DOMAIN_FOLDER="$DOMAIN"
+    # 否则，使用默认的、与域名相关的日志路径
+    local DOMAIN_FOLDER="$DOMAIN"
+    if [ -d "$HOME/.acme.sh/${DOMAIN}_ecc" ]; then
+      DOMAIN_FOLDER="${DOMAIN}_ecc"
+    fi
+    # 注意：这里的 LOG_FILE 定义应该指向 $HOME/.acme.sh/domain_folder/domain.log
+    # 原始逻辑是 $HOME/.acme.sh/${DOMAIN_FOLDER}/${DOMAIN}.log
+    LOG_FILE="$HOME/.acme.sh/${DOMAIN_FOLDER}/${DOMAIN}.log"
   fi
-  local LOG_FILE="$HOME/.acme.sh/${DOMAIN_FOLDER}/${DOMAIN}.log"
+
+  # 确保日志文件存在
+  mkdir -p "$(dirname "$LOG_FILE")"
   touch "$LOG_FILE"
 
   # 日志函数
@@ -84,6 +97,7 @@ custom_deploy() {
   local CANDIDATE_FILES=(
     "$HOME/.acme.sh/${DOMAIN}/${DOMAIN}.env"
     "$HOME/.acme.sh/${DOMAIN}_ecc/${DOMAIN}.env"
+    "$HOME/.acme.sh/custom.env"
   )
 
   for f in "${CANDIDATE_FILES[@]}"; do
@@ -100,15 +114,49 @@ custom_deploy() {
   fi
 
   log "使用配置文件: $CONFIG_FILE"
+  log "--------------------------------------------------------------------------"
+
+  # 核心修改：使用 cat 打印文件内容，并通过 log 函数写入日志
+  # 注意：我们用 sed 过滤掉注释行和空行，只打印有效配置。
+  # 确保文件内容打印完毕后，文件指针能够关闭，不影响后续的 while 循环。
+#  cat "$CONFIG_FILE" | grep -v '^\s*#' | grep -v '^\s*$' | while IFS= read -r line; do
+#      log "$line" # 这会在日志和标准输出中打印配置行
+#  done
+#  log "--------------------------------------------------------------------------"
+
+  # 核心修改：将有效配置行读入一个数组
+  local CONFIG_LINES=()
+
+  # 使用唯一的 while read 循环从文件中读取所有数据
+  while IFS= read -r line || [[ -n "$line" ]]; do
+      # 跳过空行和注释
+      if [[ -z "$line" || "$line" =~ ^# ]]; then
+          continue
+      fi
+
+      # 将有效配置行添加到数组
+      CONFIG_LINES+=("$line")
+
+      # 打印到日志和标准输出，满足您的打印需求
+      log "$line"
+  done <"$CONFIG_FILE"
+  log "--------------------------------------------------------------------------"
+
+  # 如果数组为空，说明配置文件是空的
+  if [ ${#CONFIG_LINES[@]} -eq 0 ]; then
+      log "Warning: 配置文件中没有发现有效的部署配置行，跳过部署。"
+      return 0
+  fi
 
   # --------------------------------------------------------------------------
   # 4. 遍历部署
   # --------------------------------------------------------------------------
   # 读取配置文件每一行
   # 格式: ip:path:reload_cmd
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    # 跳过空行和注释
-    [[ -z "$line" || "$line" =~ ^# ]] && continue
+  # while IFS= read -r line || [[ -n "$line" ]]; do
+  # 跳过空行和注释
+  # [[ -z "$line" || "$line" =~ ^# ]] && continue
+  for line in "${CONFIG_LINES[@]}"; do
 
     # 优化解析配置：使用 Bash 内部字符串操作代替 echo | cut (效率更高)
     # SERVER_IP
@@ -145,6 +193,7 @@ custom_deploy() {
     if [[ -n "$REMOTE_HASH" ]]; then
       if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
         log "远程证书哈希匹配 ($REMOTE_HASH)，无需更新。"
+        log "--- 完成部署 $SERVER_IP ---"
         NEED_DEPLOY=false
       else
         log "远程证书哈希不匹配 (远程: $REMOTE_HASH vs 本地: $LOCAL_HASH)，准备更新..."
@@ -240,6 +289,8 @@ custom_deploy() {
       fi
     fi
 
+    log "--- 完成部署 $SERVER_IP ---"
+
   done <"$CONFIG_FILE"
 
   log "=== 部署完成 ==="
@@ -250,12 +301,15 @@ custom_deploy() {
 # 脚本入口点 (Main Logic)
 # ------------------------------------------------------------------------------
 
+# ------------------------------------------------------------------------------
+# 脚本入口点 (Main Logic)
+# ------------------------------------------------------------------------------
+
 main() {
   # 情况 A: Renew Hook 模式 (无参数调用)
   # acme.sh 在 renew 时会导出环境变量并执行脚本 (eval)，但不传递参数
   if [[ $# -eq 0 ]]; then
     # 尝试从环境变量获取 (兼容 acme.sh 导出的变量名)
-    # 注意: acme.sh 源码中 export 的变量名可能与 deploy 时的不同
     # issue/renew 成功后 export: CERT_KEY_PATH, CERT_FULLCHAIN_PATH, Le_Domain
 
     local _d="${Le_Domain:-${DOMAIN:-}}"
@@ -277,7 +331,7 @@ main() {
     echo "用法:" >&2
     echo "  1. Deploy Hook: acme.sh --deploy -d example.com --deploy-hook custom" >&2
     echo "  2. Renew Hook:  (由 acme.sh 自动调用)" >&2
-    echo "  3. 手动执行:    $0 -d example.com [-k key] [-f fullchain]" >&2
+    echo "  3. 手动执行:    $0 -d example.com [-k key] [-f fullchain] 或 $0 -d *" >&2
     return 1
   fi
 
@@ -318,7 +372,112 @@ main() {
     esac
   done
 
-  # 2. 尝试补全缺失的参数 (环境变量或自动查找)
+  # --- [新增的遍历逻辑块开始] ---
+  # 2. 检查是否为 '遍历所有' 模式
+  if [[ "$_d" == "*" ]]; then
+    echo "=== 启用 '遍历所有域名' 模式 ==="
+
+    # set -x # 启用调试模式，打印所有执行的命令
+    echo "DEBUG: 当前 \$HOME 路径为: $HOME"
+
+    local ACME_HOME="${HOME}/.acme.sh"
+    if [[ ! -d "$ACME_HOME" ]] && [[ -d "/root/.acme.sh" ]]; then
+        ACME_HOME="/root/.acme.sh"
+        echo "DEBUG: \$HOME 路径可能不正确，已矫正 ACME_HOME 为: $ACME_HOME"
+    fi
+    echo "DEBUG: 最终 ACME_HOME 路径为: $ACME_HOME"
+
+    if [[ ! -d "$ACME_HOME" ]]; then
+        echo "Error: 无法找到 acme.sh 根目录: $ACME_HOME" >&2
+        return 1
+    fi
+
+    local total_count=0
+    local success_count=0
+
+    # 定义统一日志文件路径
+    local GLOBAL_LOG_FILE="$HOME/.acme.sh/custom.log" # <--- 新增日志变量
+
+    # 使用 for 循环遍历
+    for dir in "$ACME_HOME"/*/; do
+      if [[ ! -d "$dir" ]]; then
+          continue
+      fi
+
+      local base_name
+      base_name=$(basename "${dir%/}")
+
+      # 排除非证书目录
+      if [[ "$base_name" == "deploy" || "$base_name" == "acme.sh" || "$base_name" =~ ^\. ]]; then
+        continue
+      fi
+
+      # --- 关键修复点 ---
+      # 1. 从目录名 (base_name) 中提取纯域名 (domain_name)
+      local domain_name
+      # 移除 _ecc 或 _rsa 后缀
+      if [[ "$base_name" =~ _ecc$ ]]; then
+          domain_name="${base_name%_ecc}"
+      elif [[ "$base_name" =~ _rsa$ ]]; then
+          domain_name="${base_name%_rsa}"
+      else
+          # 目录名就是纯域名 (非 ecc/rsa 目录，如 acme.sh 默认的 rsa 目录)
+          domain_name="$base_name"
+      fi
+      # --- 修复点结束 ---
+
+      echo "DEBUG: 正在检查目录: $base_name -> 域名: $domain_name"
+
+      # 检查是否为一个有效的证书目录结构
+      # 使用 domain_name 来构造正确的私钥路径
+      local key_path="$dir$domain_name.key"
+      local fullchain_path=""
+
+      if [[ -f "$key_path" ]]; then
+        echo "DEBUG: 找到私钥文件: $key_path"
+
+        # 尝试查找 fullchain 文件
+        if [[ -f "$dir/fullchain.cer" ]]; then
+          fullchain_path="$dir/fullchain.cer"
+        elif [[ -f "$dir/fullchain.pem" ]]; then
+          fullchain_path="$dir/fullchain.pem"
+        fi
+
+        if [[ -n "$fullchain_path" ]]; then
+          echo "DEBUG: 找到完整链文件: $fullchain_path"
+          echo "--- 正在部署域名: $domain_name ---"
+
+          total_count=$((total_count + 1))
+
+          # 调用部署函数，注意这里传递的域名是 domain_name
+          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE"; then
+             success_count=$((success_count + 1))
+          fi
+        else
+          echo "DEBUG: 未找到 fullchain.cer 或 fullchain.pem，忽略目录: $base_name"
+        fi
+      else
+        echo "DEBUG: 未找到私钥文件 $domain_name.key，忽略目录: $base_name"
+      fi
+    done
+
+    # set +x # 禁用调试模式
+    echo "DEBUG: total_count=$total_count, success_count=$success_count"
+    echo "=== 遍历部署完成。成功 $success_count/$total_count 个域名。==="
+
+    if [[ "$total_count" -gt 0 && "$success_count" -eq "$total_count" ]]; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+
+  # 如果不是 * 模式，则继续执行单域名逻辑
+  # --- [新增的遍历逻辑块结束] ---
+
+
+  # 3. 尝试补全缺失的参数 (环境变量或自动查找)
+  # 如果不是 * 模式，则继续执行单域名逻辑
   _d="${_d:-${Le_Domain:-${DOMAIN:-}}}"
 
   # 如果指定了域名但没指定文件，尝试自动查找
@@ -349,9 +508,9 @@ main() {
     done
   fi
 
-  # 3. 最终验证
+  # 4. 最终验证
   if [[ -z "$_d" ]]; then
-    echo "Error: 必须指定域名 (-d domain.com)" >&2
+    echo "Error: 必须指定域名 (-d domain.com 或 -d *)" >&2
     return 1
   fi
 
@@ -361,7 +520,7 @@ main() {
     return 1
   fi
 
-  # 4. 调用部署函数
+  # 5. 调用部署函数 (单域名)
   custom_deploy "$_d" "$_k" "$_c" "$_a" "$_f"
   return $?
 }
