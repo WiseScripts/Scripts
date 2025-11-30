@@ -374,8 +374,28 @@ main() {
 
   # --- [新增的遍历逻辑块开始] ---
   # 2. 检查是否为 '遍历所有' 模式
-  if [[ "$_d" == "*" ]]; then
-    echo "=== 启用 '遍历所有域名' 模式 ==="
+  # 触发条件：
+  # 1. 确保参数 _d 非空。
+  # 2. 确保参数 _d 长度小于 4。
+  if [[ -n "$_d" ]] && [[ "${#_d}" -lt 4 ]]; then
+
+    echo "=== 警告：触发 '遍历所有域名' 模式 (参数: $_d) ==="
+    echo "此操作将尝试重新部署 acme.sh 目录下所有已签发的证书。"
+
+    # --- Y/N 确认循环 ---
+    while true; do
+        read -r -p "是否继续部署所有证书? [y/N]: " confirm_action
+        case "$confirm_action" in
+            [Yy]* )
+                break ;; # 确认，退出循环继续执行
+            [Nn]* | "" )
+                echo "操作已取消。"
+                return 0 ;; # 取消，返回成功退出
+            * )
+                echo "输入无效，请输入 'y' 或 'n'。" ;;
+        esac
+    done
+    # --- Y/N 确认循环结束 ---
 
     # set -x # 启用调试模式，打印所有执行的命令
     echo "DEBUG: 当前 \$HOME 路径为: $HOME"
@@ -510,7 +530,7 @@ main() {
 
   # 4. 最终验证
   if [[ -z "$_d" ]]; then
-    echo "Error: 必须指定域名 (-d domain.com 或 -d *)" >&2
+    echo "Error: 必须指定域名 (-d domain.com 或 -d \"*\")" >&2
     return 1
   fi
 
