@@ -252,7 +252,41 @@ custom_deploy() {
     fi
     log "证书文件已复制到 $HOST_OR_IP:$TARGET_DIR/"
 
-    # 3. 通过 ssh 执行重启命令
+    # -------------------------------------------------------------
+    # 3. 核心：远程修改文件权限 (通过 SSH 执行 chmod/chown)
+    # -------------------------------------------------------------
+    local TARGET_KEY_REMOTE="${TARGET_DIR}/${DOMAIN}.key"
+    local TARGET_CERT_REMOTE="${TARGET_DIR}/${DOMAIN}.fullchain.cer"
+    local NGINX_USER_GROUP="www-data" # Nginx worker 运行的用户组
+
+    log "正在远程设置文件权限，以适应 Nginx 用户 ($NGINX_USER_GROUP)..."
+    
+    # 目标：
+    # 1. 更改私钥文件的组所有权为 www-data
+    # 2. 设置私钥权限为 640 (root:rw, www-data:r, others:无)
+    # 3. 设置证书权限为 644
+    local CHMOD_CMD="
+        # 1. 设置私钥的组所有者为 www-data，并设置权限 640
+        chown root:$NGINX_USER_GROUP \"$TARGET_KEY_REMOTE\";
+        chmod 640 \"$TARGET_KEY_REMOTE\"; # 设置 600 给组添加读取权限
+        
+        # 2. 设置证书的权限 644
+        chown root:root \"$TARGET_CERT_REMOTE\";
+        chmod 644 \"$TARGET_CERT_REMOTE\";
+    "
+
+    # 执行远程权限修改
+    if ! ssh "root@$HOST_OR_IP" "$CHMOD_CMD"; then
+        log "Error: 无法在 $HOST_OR_IP 上设置证书权限或组所有权！"
+        continue
+    fi
+    log "远程文件权限设置成功。"
+    log "私钥权限: 640 (所有者: root, 组: www-data)"
+    log "证书权限: 644 (所有者: root, 组: root)"
+
+    # -------------------------------------------------------------
+    # 4. 通过 ssh 执行重启命令 (RELOAD_CMD)
+    # -------------------------------------------------------------
     if [[ -n "$RELOAD_CMD" ]]; then # 使用 [[ ... ]] 增强判断
       # 仅匹配简单的 "systemctl reload service_name" 格式
       if [[ "$RELOAD_CMD" =~ ^systemctl\ +reload\ +([^[:space:]]+)$ ]]; then
@@ -318,10 +352,6 @@ custom_deploy() {
   log "=== 部署完成 ==="
   return 0
 }
-
-# ------------------------------------------------------------------------------
-# 脚本入口点 (Main Logic)
-# ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
 # 脚本入口点 (Main Logic)
