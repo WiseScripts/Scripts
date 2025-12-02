@@ -231,9 +231,11 @@ custom_deploy() {
 
     if [[ -n "$REMOTE_HASH" ]]; then
       if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
-        log "远程证书哈希匹配 ($REMOTE_HASH)，无需更新。"
         if [[ "$OVERWRITE" == "false" ]]; then # 如果证书哈希匹配，并且没有设置强制覆写 (-o)
+          log "远程证书哈希匹配 ($REMOTE_HASH)，无需更新。"
           NEED_DEPLOY=false                    # 那么设置为无需部署
+        else
+          log "远程证书哈希匹配 ($REMOTE_HASH)，强制覆写。"
         fi
       else
         log "远程证书哈希不匹配 (远程: $REMOTE_HASH vs 本地: $LOCAL_HASH)，准备更新..."
