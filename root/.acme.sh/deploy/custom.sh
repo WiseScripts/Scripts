@@ -32,11 +32,23 @@ custom_deploy() {
   # local CERT_FILE="$3" # 未使用
   # local CA_FILE="$4" # 未使用
   local FULLCHAIN_FILE="$5"
-  local EXPLICIT_LOG_FILE="$6" # 新增的第6个参数
-  local HOST="$7" # 新增的第7个参数
 
   # 定义日志文件
   local LOG_FILE=""
+  local EXPLICIT_LOG_FILE=""
+  local HOST="*"
+
+  # 根据参数数量设置可选参数
+  
+  # 检查是否有第6个参数 (EXPLICIT_LOG_FILE)
+  if [[ "$#" -ge 6 ]]; then
+    EXPLICIT_LOG_FILE="$6"
+  fi
+  
+  # 检查是否有第7个参数 (HOST)
+  if [[ "$#" -ge 7 ]]; then
+    HOST="$7"
+  fi
 
   if [[ -n "$EXPLICIT_LOG_FILE" ]]; then
     # 如果第6个参数不为空，则使用它
@@ -180,13 +192,13 @@ custom_deploy() {
 
     log "=========================================================================="
     log "准备部署 $HOST_OR_IP"
+    # 如果指定了 Host 则仅部署 Host，其他跳过
     if [[ -n "$HOST" ]] && [[ "$HOST" != "$HOST_OR_IP" ]]; then
-      log "跳过部署 $HOST_OR_IP"
-      log "完成部署 $HOST_OR_IP"
-      log "=========================================================================="
-      continue
+        log "跳过部署 $HOST_OR_IP (用户指定目标为: $HOST)"
+        log "完成部署 $HOST_OR_IP" # 这里的“完成”指配置行的处理完成
+        log "=========================================================================="
+        continue # 跳到下一个配置行
     fi
-
     # ----------------------------------------------------------------------
     # 哈希检查逻辑
     # ----------------------------------------------------------------------
@@ -485,7 +497,7 @@ main() {
           total_count=$((total_count + 1))
 
           # 调用部署函数，注意这里传递的域名是 domain_name
-          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE"  "$HOST"; then
+          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE" "$HOST"; then
              success_count=$((success_count + 1))
           fi
         else
@@ -556,7 +568,7 @@ main() {
   fi
 
   # 5. 调用部署函数 (单域名)
-  custom_deploy "$_d" "$_k" "$_c" "$_a" "$_f"
+  custom_deploy "$_d" "$_k" "$_c" "$_a" "$_f" "" "$_h"
   return $?
 }
 
