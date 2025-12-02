@@ -33,22 +33,41 @@ custom_deploy() {
   # local CA_FILE="$4" # 未使用
   local FULLCHAIN_FILE="$5"
 
+  # 移除前 5 个位置参数，将剩余的命名参数留给解析循环
+  shift 5
+
   # 定义日志文件
   local LOG_FILE=""
   local EXPLICIT_LOG_FILE=""
-  local HOST="*"
-
-  # 根据参数数量设置可选参数
-  
-  # 检查是否有第6个参数 (EXPLICIT_LOG_FILE)
-  if [[ "$#" -ge 6 ]]; then
-    EXPLICIT_LOG_FILE="$6"
-  fi
-  
-  # 检查是否有第7个参数 (HOST)
-  if [[ "$#" -ge 7 ]]; then
-    HOST="$7"
-  fi
+  local HOST=""
+  local OVERWRITE=false # <--- 新增变量，默认为 false
+  # ----------------------------------------------------
+  # 2. 解析剩余的命名参数 (使用 getopts)
+  # ----------------------------------------------------
+  # 定义可接受的选项：l (log file), h (host), o (overwrite)
+  # 注意：getopts 不支持长选项 (--log-file)，必须使用短选项。
+  while getopts "l:h:o" opt; do
+      case "$opt" in
+          l) # -l <log file path>
+              EXPLICIT_LOG_FILE="$OPTARG"
+              ;;
+          h) # -h <target host>
+              HOST="$OPTARG"
+              ;;
+          o) # -h <target host>
+              OVERWRITE=true # 设置开关为 true
+              ;;
+          \?) # 遇到不支持的选项
+              echo "Error: custom_deploy 遇到无效选项 -$OPTARG" >&2
+              return 1
+              ;;
+          :) # 遇到缺少参数的选项
+              echo "Error: custom_deploy 选项 -$OPTARG 缺少参数" >&2
+              return 1
+              ;;
+      esac
+  done
+  # getopts 自动处理 shift，移除已解析的选项
 
   if [[ -n "$EXPLICIT_LOG_FILE" ]]; then
     # 如果第6个参数不为空，则使用它
@@ -213,7 +232,9 @@ custom_deploy() {
     if [[ -n "$REMOTE_HASH" ]]; then
       if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
         log "远程证书哈希匹配 ($REMOTE_HASH)，无需更新。"
-        NEED_DEPLOY=false
+        if [[ "$OVERWRITE" == "false" ]]; then # 如果证书哈希匹配，并且没有设置强制覆写 (-o)
+          NEED_DEPLOY=false                    # 那么设置为无需部署
+        fi
       else
         log "远程证书哈希不匹配 (远程: $REMOTE_HASH vs 本地: $LOCAL_HASH)，准备更新..."
       fi
@@ -260,7 +281,7 @@ custom_deploy() {
     local NGINX_USER_GROUP="www-data" # Nginx worker 运行的用户组
 
     log "正在远程设置文件权限，以适应 Nginx 用户 ($NGINX_USER_GROUP)..."
-    
+
     # 目标：
     # 1. 更改私钥文件的组所有权为 www-data
     # 2. 设置私钥权限为 640 (root:rw, www-data:r, others:无)
@@ -269,7 +290,7 @@ custom_deploy() {
         # 1. 设置私钥的组所有者为 www-data，并设置权限 640
         chown root:$NGINX_USER_GROUP \"$TARGET_KEY_REMOTE\";
         chmod 640 \"$TARGET_KEY_REMOTE\"; # 设置 600 给组添加读取权限
-        
+
         # 2. 设置证书的权限 644
         chown root:root \"$TARGET_CERT_REMOTE\";
         chmod 644 \"$TARGET_CERT_REMOTE\";
@@ -388,7 +409,7 @@ main() {
   fi
 
   # 情况 B: 手动执行模式 (有参数调用)
-  local _d="" _k="" _c="" _a="" _f="" _h=""
+  local _d="" _k="" _c="" _a="" _f="" _h="" _o=""
 
   # 1. 解析命令行参数
   while [[ $# -gt 0 ]]; do
@@ -416,6 +437,10 @@ main() {
     -h | --host)
       _h="$2"
       shift 2
+      ;;
+    -o | --overwrite)
+      _o="true"
+      shift 1
       ;;
     *) # 默认第一个位置参数为域名
       if [[ -z "$_d" && ! "$1" =~ ^- ]]; then
@@ -468,12 +493,35 @@ main() {
         return 1
     fi
 
+    # 假设 _o 是在前面解析的，现在将其设置为 local 变量
+    local OVERWRITE_FLAG="${_o:-}" # 从 main 的解析结果中获取 _o，默认为空
+
     local total_count=0
     local success_count=0
 
     # 定义统一日志文件路径
     local GLOBAL_LOG_FILE="$HOME/.acme.sh/custom.log" # <--- 新增日志变量
-    local HOST="$_h" # <--- 新增主机变量
+    local HOST_FILTER="${_h:-}" # <--- 从 main 的解析结果中获取 _h，作为主机过滤器
+
+    # ----------------------------------------------------
+    # 准备选项数组：将主脚本解析到的可选参数转换为 custom_deploy 的短选项格式
+    # ----------------------------------------------------
+    local EXTRA_OPTS=()
+
+    # 1. 传递日志文件 (-l)
+    if [[ -n "$GLOBAL_LOG_FILE" ]]; then
+      EXTRA_OPTS+=("-l" "$GLOBAL_LOG_FILE")
+    fi
+
+    # 2. 传递主机过滤 (-h)
+    if [[ -n "$HOST_FILTER" ]]; then
+      EXTRA_OPTS+=("-h" "$HOST_FILTER")
+    fi
+
+    # 3. 传递强制覆写开关 (-o)
+    if [[ "$OVERWRITE_FLAG" == "true" ]]; then
+      EXTRA_OPTS+=("-o")
+    fi
 
     # 使用 for 循环遍历
     for dir in "$ACME_HOME"/*/; do
@@ -526,8 +574,11 @@ main() {
 
           total_count=$((total_count + 1))
 
+          # ----------------------------------------------------
           # 调用部署函数，注意这里传递的域名是 domain_name
-          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "$GLOBAL_LOG_FILE" "$HOST"; then
+          # 关键修改：调用 custom_deploy，将命名参数数组作为额外的参数传入
+          # 参数顺序: DOMAIN, KEY_FILE, "", "", FULLCHAIN_FILE, [EXTRA_OPTS]
+          if custom_deploy "$domain_name" "$key_path" "" "" "$fullchain_path" "${EXTRA_OPTS[@]}"; then
              success_count=$((success_count + 1))
           fi
         else
@@ -597,8 +648,17 @@ main() {
     return 1
   fi
 
+  # 确保在传递参数时，只传递非空的值
+  local EXTRA_OPTS=()
+  if [[ -n "$_h" ]]; then
+      EXTRA_OPTS+=("-h" "$_h")
+  fi
+  if [[ -n "$_o" ]]; then
+      EXTRA_OPTS+=("-o")
+  fi
+
   # 5. 调用部署函数 (单域名)
-  custom_deploy "$_d" "$_k" "$_c" "$_a" "$_f" "" "$_h"
+  custom_deploy "$_d" "$_k" "$_c" "$_a" "$_f" "${EXTRA_OPTS[@]}"
   return $?
 }
 
